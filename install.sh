@@ -2,7 +2,7 @@
 set -e
 
 # ═══════════════════════════════════════════════════════════
-# 🚀 RAMZES VPN — ПОЛНАЯ УСТАНОВКА ПОД КЛЮЧ v2.0
+# 🚀 RAMZES VPN — ПОЛНАЯ УСТАНОВКА ПОД КЛЮЧ v2.1
 # ═══════════════════════════════════════════════════════════
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -23,7 +23,7 @@ GITHUB_RAW="https://raw.githubusercontent.com/sashassashaa/ramzesvpn2/main"
 clear
 echo -e "${GREEN}${BOLD}"
 echo "╔══════════════════════════════════════════╗"
-echo "║     🚀 RAMZES VPN — УСТАНОВЩИК v2.0     ║"
+echo "║     🚀 RAMZES VPN — УСТАНОВЩИК v2.1     ║"
 echo "║     RemnaWave + Hysteria2 + Telegram     ║"
 echo "╚══════════════════════════════════════════╝"
 echo -e "${NC}"
@@ -32,27 +32,63 @@ echo -e "📦 Debian 12 • 2 vCPU • 2+ GB RAM"
 echo ""
 
 # ═══════════════════════════════════════════════════════════
-step "📋 ШАГ 1/7: СИСТЕМА"
+step "📋 ШАГ 1/7: СИСТЕМНЫЕ ПАКЕТЫ"
 # ═══════════════════════════════════════════════════════════
-info "Обновление пакетов..."
+info "Обновление системы..."
 echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 apt update -qq && apt upgrade -y -qq
-apt install -y -qq curl wget git unzip nginx python3 python3-venv python3-pip openssl cron ufw sshpass certbot
-log "Система готова"
+log "Система обновлена"
+
+info "Установка всех зависимостей..."
+apt install -y -qq \
+    curl wget git unzip \
+    nginx \
+    python3 python3-venv python3-pip \
+    openssl cron ufw sshpass \
+    certbot \
+    ca-certificates gnupg lsb-release \
+    apache2-utils \
+    netcat-openbsd
+log "Зависимости установлены"
 
 # ═══════════════════════════════════════════════════════════
 step "🐳 ШАГ 2/7: DOCKER"
 # ═══════════════════════════════════════════════════════════
 if ! command -v docker &> /dev/null; then
+    info "Установка Docker..."
     curl -fsSL https://get.docker.com | sh
     systemctl enable --now docker
+    log "Docker установлен"
+else
+    log "Docker уже установлен"
 fi
-apt install -y -qq docker-compose-plugin
+
+# Docker Compose — через плагин или отдельно
+if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
+    info "Установка Docker Compose..."
+    # Способ 1: плагин
+    apt install -y -qq docker-compose-plugin 2>/dev/null || {
+        # Способ 2: отдельный бинарник
+        curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+    }
+    log "Docker Compose установлен"
+else
+    log "Docker Compose уже есть"
+fi
+
+# Проверка
+docker --version
+docker compose version 2>/dev/null || docker-compose --version
 log "Docker готов"
 
 # ═══════════════════════════════════════════════════════════
 step "🔐 ШАГ 3/7: ДОМЕН + SSL"
 # ═══════════════════════════════════════════════════════════
+echo ""
+info "Нужен домен для SSL:"
+echo "  1. duckdns.org — бесплатный"
+echo "  2. Свой домен"
 echo ""
 read -p "🌐 Домен (Enter для ramzesvpnbot.duckdns.org): " DOMAIN
 DOMAIN=${DOMAIN:-ramzesvpnbot.duckdns.org}
@@ -70,20 +106,20 @@ EOF
     log "DuckDNS: $DOMAIN"
 fi
 
-info "SSL-сертификат..."
-systemctl stop nginx 2>/dev/null
-certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos --email "admin@$DOMAIN" 2>/dev/null || {
+info "Выпуск SSL..."
+systemctl stop nginx 2>/dev/null || true
+certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos --email "admin@$DOMAIN" 2>/dev/null && log "SSL от Lets Encrypt" || {
     warn "Самоподписанный SSL..."
     mkdir -p /etc/nginx/ssl
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout /etc/nginx/ssl/panel.key -out /etc/nginx/ssl/panel.crt -subj "/CN=$DOMAIN"
 }
-systemctl start nginx
-log "SSL готов"
+systemctl start nginx 2>/dev/null || true
 
 # ═══════════════════════════════════════════════════════════
-step "🎛️ ШАГ 4/7: REMNAWAVE"
+step "🎛️ ШАГ 4/7: REMNAWAVE ПАНЕЛЬ"
 # ═══════════════════════════════════════════════════════════
+info "Установка RemnaWave + PostgreSQL + Redis..."
 mkdir -p /opt/remnawave && cd /opt/remnawave
 
 DB_PASS=$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)
@@ -104,7 +140,9 @@ services:
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U remnawave"]
-      interval: 5s; timeout: 5s; retries: 10
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -112,7 +150,9 @@ services:
     restart: always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s; timeout: 5s; retries: 10
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   remnawave:
     image: ghcr.io/remnawave/backend:latest
@@ -123,30 +163,56 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
     environment:
-      NODE_ENV: production; PORT: 3000
+      NODE_ENV: production
+      PORT: 3000
       DATABASE_URL: "postgresql://remnawave:$DB_PASS@postgres:5432/remnawave"
-      REDIS_HOST: redis; REDIS_PORT: 6379
-      JWT_SECRET: "$JWT_SECRET"; APP_SECRET: "$APP_SECRET"
-      FRONT_END_DOMAIN: "https://$DOMAIN"; SUB_PUBLIC_DOMAIN: "$DOMAIN"
-      METRICS_USER: admin; METRICS_PASS: "$METRICS_PASS"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: "$JWT_SECRET"
+      APP_SECRET: "$APP_SECRET"
+      FRONT_END_DOMAIN: "https://$DOMAIN"
+      SUB_PUBLIC_DOMAIN: "$DOMAIN"
+      METRICS_USER: admin
+      METRICS_PASS: "$METRICS_PASS"
       NODE_TLS_REJECT_UNAUTHORIZED: "0"
 
-volumes: {pgdata:}
+volumes:
+  pgdata:
 COMPOSE
 
-docker compose pull -q && docker compose up -d
+# Запускаем
+docker compose pull -q 2>/dev/null || docker-compose pull -q 2>/dev/null
+docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null
 
-for i in {1..60}; do
-    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000 2>/dev/null | grep -q "200\|302\|401" && { log "Панель запущена (${i}с)"; break; }
+info "Ожидание панели..."
+for i in {1..90}; do
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000 2>/dev/null || echo "000")
+    if [ "$CODE" != "000" ]; then
+        log "Панель запущена (HTTP $CODE, ${i}с)"
+        break
+    fi
     sleep 1
 done
 
+# Nginx
+CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+if [ ! -f "$CERT_PATH" ]; then
+    CERT_PATH="/etc/nginx/ssl/panel.crt"
+    KEY_PATH="/etc/nginx/ssl/panel.key"
+fi
+
 cat <<NGINX > /etc/nginx/sites-available/remnawave
-server { listen 80; server_name $DOMAIN; return 301 https://\$host\$request_uri; }
 server {
-    listen 443 ssl http2; server_name $DOMAIN;
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    listen 80;
+    server_name $DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+server {
+    listen 443 ssl http2;
+    server_name $DOMAIN;
+    ssl_certificate $CERT_PATH;
+    ssl_certificate_key $KEY_PATH;
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -168,20 +234,36 @@ log "Панель: https://$DOMAIN"
 # ═══════════════════════════════════════════════════════════
 step "⚡ ШАГ 5/7: HYSTERIA2"
 # ═══════════════════════════════════════════════════════════
+info "Установка Hysteria2..."
 mkdir -p /opt/hysteria2 && cd /opt/hysteria2
+
 curl -sLO https://github.com/apernet/hysteria/releases/download/app/v2.6.1/hysteria-linux-amd64
-mv hysteria-linux-amd64 hysteria2 && chmod +x hysteria2
+mv -f hysteria-linux-amd64 hysteria2
+chmod +x hysteria2
 
 HY_PASS=$(openssl rand -base64 16 | tr -d '/+=' | head -c 16)
+
 openssl req -x509 -nodes -days 365 -newkey ec:<(openssl ecparam -name prime256v1) \
     -keyout private.key -out cert.crt -subj "/CN=www.google.com" 2>/dev/null
 
 cat <<HY > config.yaml
 listen: :443
-tls: {cert: /opt/hysteria2/cert.crt, key: /opt/hysteria2/private.key}
-auth: {type: password, password: $HY_PASS}
-masquerade: {type: proxy, proxy: {url: https://www.google.com, rewriteHost: true}}
-quic: {initStreamReceiveWindow: 8388608, maxStreamReceiveWindow: 8388608, initConnReceiveWindow: 20971520, maxConnReceiveWindow: 20971520}
+tls:
+  cert: /opt/hysteria2/cert.crt
+  key: /opt/hysteria2/private.key
+auth:
+  type: password
+  password: $HY_PASS
+masquerade:
+  type: proxy
+  proxy:
+    url: https://www.google.com
+    rewriteHost: true
+quic:
+  initStreamReceiveWindow: 8388608
+  maxStreamReceiveWindow: 8388608
+  initConnReceiveWindow: 20971520
+  maxConnReceiveWindow: 20971520
 HY
 
 cat <<SVC > /etc/systemd/system/hysteria2.service
@@ -197,17 +279,31 @@ WantedBy=multi-user.target
 SVC
 
 systemctl daemon-reload && systemctl enable --now hysteria2
-log "Hysteria2 запущен"
+log "Hysteria2 запущен (пароль: $HY_PASS)"
 
 # ═══════════════════════════════════════════════════════════
 step "🤖 ШАГ 6/7: ТЕЛЕГРАМ БОТ"
 # ═══════════════════════════════════════════════════════════
+info "Установка бота..."
 mkdir -p /opt/RamzesVPN && cd /opt/RamzesVPN
 
 # Скачиваем файлы из GitHub
-curl -sO "$GITHUB_RAW/requirements.txt"
-curl -sO "$GITHUB_RAW/remnawave.py"
-curl -sO "$GITHUB_RAW/bot.py"
+curl -sO "$GITHUB_RAW/requirements.txt" || {
+    warn "Не удалось скачать requirements.txt из GitHub, создаю локально..."
+    cat > requirements.txt << 'REQ'
+aiogram>=3.4.0
+aiohttp>=3.9.3
+python-dotenv>=1.0.1
+REQ
+}
+
+curl -sO "$GITHUB_RAW/remnawave.py" || {
+    warn "Не удалось скачать remnawave.py из GitHub"
+}
+
+curl -sO "$GITHUB_RAW/bot.py" || {
+    warn "Не удалось скачать bot.py из GitHub"
+}
 
 python3 -m venv venv
 source venv/bin/activate
@@ -233,9 +329,10 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/opt/RamzesVPN
-Environment="PATH=/opt/RamzesVPN/venv/bin"
+Environment="PATH=/opt/RamzesVPN/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/opt/RamzesVPN/venv/bin/python /opt/RamzesVPN/bot.py
-Restart=always; RestartSec=5
+Restart=always
+RestartSec=5
 [Install]
 WantedBy=multi-user.target
 SVC
@@ -243,16 +340,17 @@ SVC
 systemctl daemon-reload && systemctl enable vpn_bot
 systemctl restart vpn_bot
 sleep 2
-systemctl is-active --quiet vpn_bot && log "Бот запущен!" || warn "Бот не запущен"
+systemctl is-active --quiet vpn_bot && log "Бот запущен!" || warn "Проверь: systemctl status vpn_bot"
 
 # ═══════════════════════════════════════════════════════════
-step "📝 ШАГ 7/7: ПОДПИСКА"
+step "📡 ШАГ 7/7: ПОДПИСКА"
 # ═══════════════════════════════════════════════════════════
 cat <<NGINX > /etc/nginx/sites-available/sub
 server {
-    listen 443 ssl http2; server_name $DOMAIN;
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+    listen 443 ssl http2;
+    server_name $DOMAIN;
+    ssl_certificate $CERT_PATH;
+    ssl_certificate_key $KEY_PATH;
     location /sub {
         default_type text/plain;
         return 200 "hysteria2://$HY_PASS@$IP:443?sni=www.google.com&insecure=1&alpn=h3#Ramzes-VPN\n";
@@ -281,6 +379,6 @@ echo ""
 echo -e "${YELLOW}📝 Далее:${NC}"
 echo -e "  1. Зарегистрируйся в панели"
 echo -e "  2. Settings → API → Create Token"
-echo -e "  3. Обнови .env: nano /opt/RamzesVPN/.env"
+echo -e "  3. nano /opt/RamzesVPN/.env  (если токен изменился)"
 echo -e "  4. systemctl restart vpn_bot"
 echo ""
