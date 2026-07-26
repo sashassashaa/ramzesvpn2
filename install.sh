@@ -63,23 +63,26 @@ else
     log "Docker уже установлен"
 fi
 
-# Docker Compose — через плагин или отдельно
-if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
-    info "Установка Docker Compose..."
-    # Способ 1: плагин
-    apt install -y -qq docker-compose-plugin 2>/dev/null || {
-        # Способ 2: отдельный бинарник
-        curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose
-    }
-    log "Docker Compose установлен"
+# Docker Compose
+COMPOSE_CMD=""
+if docker compose version &> /dev/null; then
+    COMPOSE_CMD="docker compose"
+    log "docker compose (плагин)"
+elif command -v docker-compose &> /dev/null; then
+    COMPOSE_CMD="docker-compose"
+    log "docker-compose (отдельный)"
 else
-    log "Docker Compose уже есть"
+    info "Установка Docker Compose..."
+    mkdir -p /usr/local/lib/docker/cli-plugins
+    curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose 2>/dev/null
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    COMPOSE_CMD="docker compose"
+    log "Docker Compose установлен как плагин"
 fi
 
 # Проверка
 docker --version
-docker compose version 2>/dev/null || docker-compose --version
+$COMPOSE_CMD version
 log "Docker готов"
 
 # ═══════════════════════════════════════════════════════════
